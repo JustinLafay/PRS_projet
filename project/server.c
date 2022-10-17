@@ -117,17 +117,7 @@ int main(int argc, char* argv[])
 
                 recvfrom(sock_udp_data, buffer_file, SIZE, 0, (struct sockaddr*)&data_msg_udp, &udp_size_ack);
                 printf("received : %s \n", buffer_file);
-
-                while('jai pas recu'){
-
-                }do();
-                FD_SET(socketListener, &readfds);
-
-
-
-
-
-
+                // FD_SET(socketListener, &readfds);
 
                 // Making sure its the correct ACK
                 if (atoi(&buffer_file[3]) != sequence_number)
