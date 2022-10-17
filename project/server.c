@@ -39,7 +39,6 @@ int main(int argc, char* argv[])
     memset((char*)&data_msg_udp, 0, sizeof(data_msg_udp));
     data_msg_udp.sin_addr.s_addr = INADDR_ANY;
     data_msg_udp.sin_family = AF_INET;
-    data_msg_udp.sin_port = 0;
     data_msg_udp.sin_port = htons(1234);
 
 
@@ -64,7 +63,6 @@ int main(int argc, char* argv[])
                 printf("Waiting for SYN... Reading : %s \n", buffer_udp);
             } while (strcmp(buffer_udp, "SYN") != 0 );
     
-            
             // Sending SYN_ACK
             bind(sock_udp_data, (struct sockaddr*)&data_msg_udp, sizeof(data_msg_udp));
             char buffer_udp_syn_ack[11];
