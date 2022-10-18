@@ -101,7 +101,6 @@ int main(int argc, char* argv[])
             char buffer_file[SIZE];
             //memset(buffer_file, 0, sizeof(buffer_file));
             int sequence_number = 1;
-            printf("seq_number : %d\n", sequence_number);
 
             // While not end of file
             while (!feof(fp))
