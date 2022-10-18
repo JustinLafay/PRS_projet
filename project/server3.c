@@ -42,7 +42,6 @@ int create_sock(struct sockaddr_in *addr_ptr, int port) {
 
 int main(int argc, char *argv[]) {
   /** Server running ... **/
-  int acceptation;
   while (1) {
     /** Defining UDP CONTROL socket **/
     struct sockaddr_in my_addr_udp;
@@ -88,6 +87,19 @@ int main(int argc, char *argv[]) {
       } while (strcmp(buffer_udp_ack, "ACK") != 0);
 
       printf("ACK exchanges completed succesfully \n");
+
+      // CREATION DE FORK DONNEE
+      int x = fork();
+
+      // SEPARATION PARENT/ENFANT
+      if (x != 0) {
+        close(sock_udp_data);
+        continue;
+      }
+
+      // FERMER SOCKET ACCUEIL POUR ENFANT
+      close(sock_udp);
+
       printf("\n** Switching to port : %d \n", ntohs(data_msg_udp.sin_port));
       // Receiving data message 'hello, I'm a useful message'
       char buffer_udp_msg[MSG_LEN_USEFUL];
@@ -140,7 +152,12 @@ int main(int argc, char *argv[]) {
       sendto(sock_udp, file_ended, strlen(file_ended) + 1, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
       printf("**File sent : EOF**\n");
 
+      // FERMER SOCKET DONNEE
+      close(sock_udp_data);
+
+      // FIN DE LA FORK CHILD
+      exit(0);
+
     }  // end UDP socket
   }    // end while(1)-> server running
-  close(acceptation);
 }
