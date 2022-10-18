@@ -41,14 +41,13 @@ int create_sock(struct sockaddr_in *addr_ptr, int port) {
 }
 
 int main(int argc, char *argv[]) {
+  int port = 1500;
   /** Server running ... **/
-  int acceptation;
   while (1) {
     /** Defining UDP CONTROL socket **/
     struct sockaddr_in my_addr_udp;
-    int sock_udp = socket(AF_INET, SOCK_DGRAM, 0);
     int reuse_udp = 1;
-    create_sock(&my_addr_udp, atoi(argv[2]));
+    int sock_udp = create_sock(&my_addr_udp, atoi(argv[2]));
 
     struct sockaddr_in my_addr_udp_client;
     fd_set im_socket;
@@ -68,10 +67,12 @@ int main(int argc, char *argv[]) {
         recvfrom(sock_udp, &buffer_udp, MSG_LEN, 0, (struct sockaddr *)&my_addr_udp, &udp_size);
         printf("Waiting for SYN... Reading : %s \n", buffer_udp);
       } while (strcmp(buffer_udp, "SYN") != 0);
+      
+      port = port + 1;
 
       /** Defining UDP DATA socket **/
       struct sockaddr_in data_msg_udp;
-      int sock_udp_data = create_sock(&data_msg_udp, 1234);
+      int sock_udp_data = create_sock(&data_msg_udp, port);
 
       // Sending SYN_ACK
       char buffer_udp_syn_ack[11];
@@ -88,6 +89,19 @@ int main(int argc, char *argv[]) {
       } while (strcmp(buffer_udp_ack, "ACK") != 0);
 
       printf("ACK exchanges completed succesfully \n");
+
+      // CREATION DE FORK DONNEE
+      int x = fork();
+
+      // SEPARATION PARENT/ENFANT
+      if (x != 0) {
+        close(sock_udp_data);
+        continue;
+      }
+
+      // FERMER SOCKET ACCUEIL POUR ENFANT
+      close(sock_udp);
+
       printf("\n** Switching to port : %d \n", ntohs(data_msg_udp.sin_port));
       // Receiving data message 'hello, I'm a useful message'
       char buffer_udp_msg[MSG_LEN_USEFUL];
@@ -140,7 +154,12 @@ int main(int argc, char *argv[]) {
       sendto(sock_udp, file_ended, strlen(file_ended) + 1, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
       printf("**File sent : EOF**\n");
 
+      // FERMER SOCKET DONNEE
+      close(sock_udp_data);
+
+      // FIN DE LA FORK CHILD
+      exit(0);
+
     }  // end UDP socket
   }    // end while(1)-> server running
-  close(acceptation);
 }
