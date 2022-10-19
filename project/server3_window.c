@@ -14,6 +14,9 @@
 
 #define SIZE 1024
 
+int credit = 30;
+pthread_mutex_t lock;
+
 // FONCTION CREATION DE SOCKET
 
 int create_sock(struct sockaddr_in *addr_ptr, int port) {
@@ -38,6 +41,46 @@ int create_sock(struct sockaddr_in *addr_ptr, int port) {
   }
 
   return sock;
+}
+
+// FONCTION THREAD SEND
+
+void *thread_send(int sock, char file_name) {
+  int n;
+  FILE *fp = fopen(file_name, "r");
+  int size = fseek(fp, 0L, SEEK_END);
+  long int res = ftell(fp);
+  printf("Size file %d \n", res);
+
+  int sequence_number = 1;
+  int chunk_file;
+  char seq_num[1032];
+  char buffer_file[SIZE];
+
+  memset(buffer_file, 0, sizeof(buffer_file));
+  rewind(fp);
+
+  while (!feof(fp)) {
+    if (credit > 0) {
+      chunk_file = fread(buffer_file, 1, SIZE, fp);
+      sprintf(seq_num, "%06d", sequence_number);
+      memcpy(seq_num + 6, buffer_file, chunk_file);
+      sendto(sock, seq_num, SIZE, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
+    }
+  }
+}
+
+void *thread_receive(int sock, struct sockaddr_in *addr_ptr) {
+  fd_set rset;
+  FD_ZERO(&rset);
+  FD_SET(sock, &rset);
+
+  int nready, maxfdp1;
+
+  maxfdp1 = max(sock) + 1;
+  nready = select(maxfdp1, &rset, NULL, NULL, NULL);
+  if (FD_ISSET(sock, &rset)) {
+  }
 }
 
 int main(int argc, char *argv[]) {
@@ -104,6 +147,9 @@ int main(int argc, char *argv[]) {
       // FERMER SOCKET ACCUEIL POUR ENFANT
       close(sock_udp);
 
+      pthread_t tid;
+      pthread_create(&tid, NULL, thread_send, sock_udp_data);
+
       printf("\n** Switching to port : %d \n", port);
       // Receiving data message 'hello, I'm a useful message'
       char buffer_udp_msg[MSG_LEN_USEFUL];
@@ -124,7 +170,7 @@ int main(int argc, char *argv[]) {
       char buffer_file[SIZE];
       // memset(buffer_file, 0, sizeof(buffer_file));
       int sequence_number = 1;
- 
+
       struct timeval tv;
       tv.tv_sec = 0;
       tv.tv_usec = 100000;
