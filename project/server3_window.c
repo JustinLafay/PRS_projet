@@ -11,8 +11,9 @@
 
 #define MSG_LEN 60          // for UDP buffer
 #define MSG_LEN_USEFUL 700  // for UDP buffer
-
 #define SIZE 1024
+#define BUFFER 30
+#define TIMEOUT
 
 int credit = 30;
 pthread_mutex_t lock;
@@ -45,7 +46,7 @@ int create_sock(struct sockaddr_in *addr_ptr, int port) {
 
 // FONCTION THREAD SEND
 
-void *thread_send(int sock, char file_name) {
+void *thread_send(int sock, struct sockaddr_in *addr_ptr, char file_name) {
   int n;
   FILE *fp = fopen(file_name, "r");
   int size = fseek(fp, 0L, SEEK_END);
@@ -56,6 +57,8 @@ void *thread_send(int sock, char file_name) {
   int chunk_file;
   char seq_num[1032];
   char buffer_file[SIZE];
+  char circular_buffer[BUFFER] = {0};
+  int i;
 
   memset(buffer_file, 0, sizeof(buffer_file));
   rewind(fp);
@@ -63,23 +66,48 @@ void *thread_send(int sock, char file_name) {
   while (!feof(fp)) {
     if (credit > 0) {
       chunk_file = fread(buffer_file, 1, SIZE, fp);
+
+      for (i = 0; i < BUFFER - 1; i++) {
+        circular_buffer[i] = circular_buffer[i + 1];
+      }
+      circular_buffer[BUFFER - 1] = chunk_file;
+
       sprintf(seq_num, "%06d", sequence_number);
       memcpy(seq_num + 6, buffer_file, chunk_file);
-      sendto(sock, seq_num, SIZE, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
+      sendto(sock, seq_num, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr *));
+      credit--;
     }
+
+    // IF MESSAGE FROM RECEIVER DO SOMETHING
   }
 }
 
-void *thread_receive(int sock, struct sockaddr_in *addr_ptr) {
-  fd_set rset;
-  FD_ZERO(&rset);
-  FD_SET(sock, &rset);
+// FONCTION THREAD RECEIVE
 
-  int nready, maxfdp1;
+void *thread_receive(int sock, struct sockaddr_in *addr_ptr) {
+  fd_set rset, rtimeout;
+  FD_ZERO(&rset);
+  FD_ZERO(&rtimeout);
+  FD_SET(sock, &rset);
+  FD_SET(sock, &rtimeout);
+
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_usec = 100000;
+
+  char buffer_file[SIZE];
+  int nready, maxfdp1, n, ntimeout;
 
   maxfdp1 = max(sock) + 1;
   nready = select(maxfdp1, &rset, NULL, NULL, NULL);
+  ntimeout = select(maxfdp1, &rtimeout, NULL, NULL, &tv);
   if (FD_ISSET(sock, &rset)) {
+    n = recvfrom(sock, buffer_file, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr *));
+    credit++;
+  }
+
+  if (FD_ISSET(sock, &rtimeout)) {
+    // SEND LAST ACK TO SENDER
   }
 }
 
