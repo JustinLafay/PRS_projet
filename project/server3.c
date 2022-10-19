@@ -44,6 +44,7 @@ int main(int argc, char *argv[]) {
   int port = 1500;
   /** Server running ... **/
   while (1) {
+    printf("Entering server...");
     /** Defining UDP CONTROL socket **/
     struct sockaddr_in my_addr_udp;
     int reuse_udp = 1;
@@ -67,8 +68,9 @@ int main(int argc, char *argv[]) {
         recvfrom(sock_udp, &buffer_udp, MSG_LEN, 0, (struct sockaddr *)&my_addr_udp, &udp_size);
         printf("Waiting for SYN... Reading : %s \n", buffer_udp);
       } while (strcmp(buffer_udp, "SYN") != 0);
-      
+
       port = port + 1;
+      printf("portincr : %d\n", port);
 
       /** Defining UDP DATA socket **/
       struct sockaddr_in data_msg_udp;
@@ -102,7 +104,7 @@ int main(int argc, char *argv[]) {
       // FERMER SOCKET ACCUEIL POUR ENFANT
       close(sock_udp);
 
-      printf("\n** Switching to port : %d \n", ntohs(data_msg_udp.sin_port));
+      printf("\n** Switching to port : %d \n", port);
       // Receiving data message 'hello, I'm a useful message'
       char buffer_udp_msg[MSG_LEN_USEFUL];
       // unsigned int udp_size_ack = sizeof(data_msg_udp);
@@ -112,7 +114,7 @@ int main(int argc, char *argv[]) {
       // Sending the jpeg file
       int n;
       // char buffer[SIZE];
-      FILE *fp = fopen("Britse-Korthaar.jpg", "r");
+      FILE *fp = fopen("image.jpeg", "r");
       int size = fseek(fp, 0L, SEEK_END);
       long int res = ftell(fp);
       printf("Size file %d \n", res);
@@ -122,20 +124,44 @@ int main(int argc, char *argv[]) {
       char buffer_file[SIZE];
       // memset(buffer_file, 0, sizeof(buffer_file));
       int sequence_number = 1;
-      printf("seq_number : %d\n", sequence_number);
+
+      struct timeval tv;
+      tv.tv_sec = 0;
+      tv.tv_usec = 100000;
+
+      int chunk_file;
+      char seq_num[1032];
 
       // While not end of file
       while (!feof(fp)) {
         // Reading the file & sending a part
-        int hello;
-        hello = fread(buffer_file, 1, SIZE, fp);
-        char seq_num[1032];
+        chunk_file = fread(buffer_file, 1, SIZE, fp);
         sprintf(seq_num, "%06d", sequence_number);
-        memcpy(seq_num + 6, buffer_file, hello);
+        memcpy(seq_num + 6, buffer_file, chunk_file);
         sendto(sock_udp_data, seq_num, SIZE, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
 
-        recvfrom(sock_udp_data, buffer_file, SIZE, 0, (struct sockaddr *)&data_msg_udp, &udp_size_ack);
+        n = recvfrom(sock_udp_data, buffer_file, SIZE, 0, (struct sockaddr *)&data_msg_udp, &udp_size_ack);
         printf("received : %s \n", buffer_file);
+
+        if (setsockopt(sock_udp_data, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+          perror("Error");
+        }
+
+        // all good
+        if (n > 0) {
+          printf("received : %s \n", buffer_file);
+        }
+
+        // if error in receiving (< 0)
+        else {
+          do {
+            printf("Error when receiving (%d), sending again %d\n", n, sequence_number);
+            sendto(sock_udp_data, seq_num, SIZE, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
+            n = recvfrom(sock_udp_data, buffer_file, SIZE, 0, (struct sockaddr *)&data_msg_udp, &udp_size_ack);
+            printf("received BIS : %s \n", buffer_file);
+          } while (n < 0);
+        }
+
         // FD_SET(socketListener, &readfds);
 
         // Making sure its the correct ACK
@@ -146,20 +172,20 @@ int main(int argc, char *argv[]) {
           perror("[ERROR] sending data to the server.\n");
           exit(1);
         }
+        memset(buffer_file, 0, sizeof(buffer_file));
         sequence_number += 1;
       }
       fclose(fp);
       // Sending it's the end of the file to the server
       char *file_ended = "FIN";
-      sendto(sock_udp, file_ended, strlen(file_ended) + 1, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
+      sendto(sock_udp_data, file_ended, strlen(file_ended) + 1, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
       printf("**File sent : EOF**\n");
 
       // FERMER SOCKET DONNEE
       close(sock_udp_data);
 
       // FIN DE LA FORK CHILD
-      exit(0);
-
-    }  // end UDP socket
-  }    // end while(1)-> server running
+      exit(x);
+    }
+  }
 }
