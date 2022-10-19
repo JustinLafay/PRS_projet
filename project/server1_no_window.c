@@ -54,13 +54,8 @@ int main(int argc, char* argv[])
     /** Server running ... **/
     while(1) {
         struct sockaddr_in my_addr_udp_client;
-        fd_set im_socket;
-        FD_SET(sock_udp, &im_socket);
-        select(5, &im_socket, NULL, NULL, NULL);
 
-        //printf("Receving UDP message \n");
         //printf("** port : %d \n", ntohs(my_addr_udp.sin_port));
-
 
         // waiting to receive SYN
         char buffer_udp[MSG_LEN];
