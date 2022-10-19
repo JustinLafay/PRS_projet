@@ -114,17 +114,17 @@ int main(int argc, char *argv[]) {
       // Sending the jpeg file
       int n;
       // char buffer[SIZE];
-      FILE *fp = fopen("image.jpeg", "r");
+      FILE *fp = fopen(argv[3], "r");
       int size = fseek(fp, 0L, SEEK_END);
       long int res = ftell(fp);
       printf("Size file %d \n", res);
 
       // Going at the begening of the file to transmmit the begining
-      fseek(fp, 0L, SEEK_SET);
+      rewind(fp);
       char buffer_file[SIZE];
       // memset(buffer_file, 0, sizeof(buffer_file));
       int sequence_number = 1;
-
+ 
       struct timeval tv;
       tv.tv_sec = 0;
       tv.tv_usec = 100000;
