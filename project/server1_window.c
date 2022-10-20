@@ -10,12 +10,13 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define MSG_LEN 60 //for UDP buffer
-#define MSG_LEN_USEFUL 700 //for UDP buffer
+#define MSG_LEN 5
+#define MSG_LEN_USEFUL 100
+#define PORT_DATA 1234
 
 #define SIZE 1024
+#define SIZE_TXT 100
 
-// gcc server1.c -o server1
 
 int main(int argc, char* argv[])
 {   
@@ -43,22 +44,12 @@ int main(int argc, char* argv[])
     data_msg_udp.sin_addr.s_addr = INADDR_ANY;
     data_msg_udp.sin_family = AF_INET;
     data_msg_udp.sin_port = 0;
-
-    int data_port = 1234;
-    data_msg_udp.sin_port = htons(data_port);
+    data_msg_udp.sin_port = htons(PORT_DATA);
 
     time_t start,end;
-    start = clock();
-
 
     /** Server running ... **/
     while(1) {
-        struct sockaddr_in my_addr_udp_client;
-
-        //printf("Receving UDP message \n");
-        //printf("** port : %d \n", ntohs(my_addr_udp.sin_port));
-
-
         // waiting to receive SYN
         char buffer_udp[MSG_LEN];
         unsigned int udp_size = sizeof(my_addr_udp);
@@ -66,9 +57,7 @@ int main(int argc, char* argv[])
             //printf("Waiting for SYN... Reading : %s \n", buffer_udp);
         } while (strcmp(buffer_udp, "SYN") != 0 );
 
-        time_t start,end;
         start = clock();
-
 
         // Sending SYN_ACK
         bind(sock_udp_data, (struct sockaddr*)&data_msg_udp, sizeof(data_msg_udp));
@@ -86,17 +75,14 @@ int main(int argc, char* argv[])
         } while(strcmp(buffer_udp_ack, "ACK") != 0);
 
 
-        //printf("ACK exchanges completed succesfully \n");
         //printf("\n** Switching to port : %d \n", ntohs(data_msg_udp.sin_port));
-        // Receiving data message 'hello, I'm a useful message'
         char buffer_udp_msg[MSG_LEN_USEFUL];
         recvfrom(sock_udp_data, &buffer_udp_msg, MSG_LEN_USEFUL, 0, (struct sockaddr*)&data_msg_udp, &udp_size_ack);
         printf("reading : %s \n", buffer_udp_msg);
 
         // Sending the jpeg file
         int n = 0 ;
-        //char buffer[SIZE];
-        FILE* fp = fopen("maitre_corbeau.txt", "r");
+        FILE* fp = fopen(buffer_udp_msg, "r");
         int size = fseek(fp, 0L, SEEK_END);
         long int res = ftell(fp);
         printf("Size file %d \n", res);
@@ -104,6 +90,7 @@ int main(int argc, char* argv[])
         //Going at the begening of the file to transmmit the begining
         fseek(fp, 0L, SEEK_SET);
         char buffer_file[SIZE];
+        char buffer_file_corbeau[SIZE_TXT];
         int sequence_number = 1;
 
         struct timeval tv;
@@ -114,7 +101,6 @@ int main(int argc, char* argv[])
         char seq_num[1032];
 
         int window = 10;
-        //select(5, &sock_udp_data, NULL, NULL, 0);
         int i;
         int monTableau[10] = { 0 };
         
@@ -126,31 +112,32 @@ int main(int argc, char* argv[])
 
             for (i = 1; i < window; ++i)
             {
-                monTableau[i] = fread(buffer_file, 1, SIZE, fp);
-                printf("mon tableau = %d \n", monTableau[i]);
+                monTableau[i] = fread(buffer_file_corbeau, 1, SIZE_TXT, fp);
+                printf("mon tableau = %d , %s \n", monTableau[i], buffer_file_corbeau);
+                sprintf(seq_num, "%06d", sequence_number);
+                memcpy(seq_num+6, buffer_file, monTableau[i]);
+                sendto(sock_udp_data, seq_num, SIZE_TXT, 0, (struct sockaddr*)&my_addr_udp, sizeof(my_addr_udp));
+                printf("sending : %d ", sequence_number);
+                sequence_number += 1;
             }
+
             
 
-
-            chunk_file = fread(buffer_file, 1, SIZE, fp);
+            /*chunk_file = fread(buffer_file, 1, SIZE, fp);
             sprintf(seq_num, "%06d", sequence_number);
             memcpy(seq_num+6, buffer_file, chunk_file);
-            sendto(sock_udp_data, seq_num, SIZE, 0, (struct sockaddr*)&my_addr_udp, sizeof(my_addr_udp));
-            printf("sending : %d ", sequence_number);
+            sendto(sock_udp_data, seq_num, SIZE_TXT, 0, (struct sockaddr*)&my_addr_udp, sizeof(my_addr_udp));
+            printf("sending : %d ", sequence_number);*/
             
-            n = recvfrom(sock_udp_data, buffer_file, SIZE, 0, (struct sockaddr*)&data_msg_udp, &udp_size_ack);
+            n = recvfrom(sock_udp_data, buffer_file, SIZE_TXT, 0, (struct sockaddr*)&data_msg_udp, &udp_size_ack);
 
             if (setsockopt(sock_udp_data, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
             perror("Error");
             }
 
-            //all good
             if (n > 0)
-            {
-                printf("received : %s \n", buffer_file);
-            }
+            printf("received : %s \n", buffer_file);
 
-            // if error in receiving (< 0)
             else 
             {
                 do{
@@ -170,7 +157,6 @@ int main(int argc, char* argv[])
             
         }
         fclose(fp);
-        // Sending it's the end of the file to the client
         char *file_ended = "FIN";
         sendto(sock_udp, file_ended, strlen(file_ended)+1, 0, (struct sockaddr*)&my_addr_udp, sizeof(my_addr_udp));
         //printf("**File sent : EOF**\n");
@@ -184,12 +170,3 @@ int main(int argc, char* argv[])
 
 
 }
-
-/*
-When no window :  time of execution in ms
-
-with client1 :  5 8 3 4
-
-
-
-*/
