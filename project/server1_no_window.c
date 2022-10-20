@@ -94,7 +94,7 @@ int main(int argc, char* argv[])
         // Sending the jpeg file
         int n = 0 ;
         //char buffer[SIZE];
-        FILE* fp = fopen("Britse-Korthaar.jpg", "r");
+        FILE* fp = fopen(buffer_udp_msg, "r");
         int size = fseek(fp, 0L, SEEK_END);
         long int res = ftell(fp);
         //printf("Size file %d \n", res);
