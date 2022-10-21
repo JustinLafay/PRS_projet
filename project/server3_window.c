@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,9 +16,30 @@
 #define ACK_BUFFER_SIZE 4
 #define BUFFER 30
 
+pthread_t t_send;
+pthread_t t_receive;
+
+// VALEURS A SURVEILLER AVEC MUTEX
 int credit = 30;
 int value_flag_ACK = 0;
+int flag_STOP = 0;
+
 pthread_mutex_t lock;
+
+int areSame(int arr[], int n) {
+  int first = arr[0];
+
+  for (int i = 1; i < n; i++)
+    if (arr[i] != first)
+      return 0;
+  return 1;
+}
+
+struct data_thread {
+  struct sockaddr_in *addr_ptr;
+  int sock_in;
+  char *file_name;
+};
 
 // FONCTION CREATION DE SOCKET
 
@@ -47,9 +69,18 @@ int create_sock(struct sockaddr_in *addr_ptr, int port) {
 
 // FONCTION THREAD SEND
 
-void *thread_send(int sock, struct sockaddr_in *addr_ptr, char file_name) {
-  int nready, maxfdp1, n, ntimeout;
-  FILE *fp = fopen(file_name, "r");
+void *thread_send(void *data) {
+  printf("Entering thread send\n");
+
+  struct data_thread *info = data;
+
+  int sock = info->sock_in;
+  struct sockaddr_in *addr_ptr = info->addr_ptr;
+  char *file_name = info->file_name;
+
+  int ntimeout;
+  const char *mode = "r";
+  FILE *fp = fopen(file_name, mode);
   int size = fseek(fp, 0L, SEEK_END);
   long int res = ftell(fp);
   printf("Size file %d \n", res);
@@ -61,53 +92,67 @@ void *thread_send(int sock, struct sockaddr_in *addr_ptr, char file_name) {
   fd_set rtimeout;
   FD_ZERO(&rtimeout);
   FD_SET(sock, &rtimeout);
-  maxfdp1 = max(sock) + 1;
-  ntimeout = select(maxfdp1, &rtimeout, NULL, NULL, &tv.tv_usec);
+  ntimeout = select(sock, &rtimeout, NULL, NULL, &tv);
 
   int chunk_file;
-  char seq_num[1032];
+  char data_send [1032];
   char buffer_file[SIZE];
-  char circular_buffer[BUFFER] = {0};
+  char circular_buffer[BUFFER * SIZE] = {0};
   int i, sequence_number = 0;
 
   memset(buffer_file, 0, sizeof(buffer_file));
   rewind(fp);
-
   while (!feof(fp)) {
-    sequence_number++;
-    sprintf(seq_num, "%06d", sequence_number);
     while (credit > 0) {
-      chunk_file = fread(buffer_file, 1, SIZE, fp);
-      for (i = 0; i < BUFFER - 1; i++) {
-        circular_buffer[i] = circular_buffer[i + 1];
-      }
-      circular_buffer[BUFFER - 1] = chunk_file;
+      sequence_number++;
+      sprintf(data_send, "%06d", sequence_number);
+      chunk_file = fread((char *)&circular_buffer[SIZE * sequence_number % BUFFER], 1, SIZE, fp);
 
-      memcpy(seq_num + 6, buffer_file, chunk_file);
-      sendto(sock, seq_num, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr *));
+      memcpy(data_send + 6, (char *)&circular_buffer[sequence_number % BUFFER], chunk_file);
+      // printf("%d\n", ntohl(addr_ptr->sin_port));
+      printf("Sent %ld bytes to %s:%d\n", SIZE, inet_ntoa(addr_ptr->sin_addr), ntohs(addr_ptr->sin_port));
+      sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
+      pthread_mutex_lock(&lock);
       credit--;
+      pthread_mutex_unlock(&lock);
     }
 
     if (FD_ISSET(sock, &rtimeout)) {
-      memcpy(seq_num + 6, buffer_file, chunk_file);
-      sendto(sock, seq_num, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr *));
+      memcpy(data_send + 6, buffer_file, chunk_file);
+      sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
     }
 
+    // char neg_shift = circular_buffer[sequence_number - value_flag_ACK];
+
+    pthread_mutex_lock(&lock);
     if (value_flag_ACK != 0) {
-      memcpy(seq_num + 6, circular_buffer[sequence_number - value_flag_ACK], chunk_file);
-      sendto(sock, seq_num, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr *));
+      memcpy(data_send + 6, (char *)&circular_buffer[sequence_number % BUFFER], chunk_file);
+      sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
     }
+    pthread_mutex_unlock(&lock);
   }
+  fclose(fp);
+  flag_STOP = 1;
+  return NULL;
 }
 
 // FONCTION THREAD RECEIVE
 
-void *thread_receive(int sock, struct sockaddr_in *addr_ptr) {
+void *thread_receive(void *data) {
+  struct data_thread *info = data;
+
+  int sock = info->sock_in;
+  struct sockaddr_in *addr_ptr = info->addr_ptr;
+  char *file_name = info->file_name;
+
+  printf("Entering thread receive\n");
   char buffer_file[SIZE];
+
   int buffer_ACK[ACK_BUFFER_SIZE] = {0};
   int last_ACK = 0, actu_ACK = 0, grosse_patate = 0;
+  int ld = sizeof(struct sockaddr *);
   while (1) {
-    recvfrom(sock, buffer_file, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr *));
+    recvfrom(sock, buffer_file, SIZE, 0, (struct sockaddr *)addr_ptr, &ld);
 
     for (int i = 0; i < ACK_BUFFER_SIZE - 1; i++) {
       buffer_ACK[i] = buffer_ACK[i + 1];
@@ -123,31 +168,29 @@ void *thread_receive(int sock, struct sockaddr_in *addr_ptr) {
     last_ACK = actu_ACK;
     actu_ACK = grosse_patate;
 
-    // MUTEX D
-    credit = credit + (actu_ACK - last_ACK);
-    // MUTEX F
+    pthread_mutex_lock(&lock);
+    if (credit < 30) {
+      credit = credit + (actu_ACK - last_ACK);
+    }
+    pthread_mutex_unlock(&lock);
 
     int first = buffer_ACK[0];
 
-    if (areSame == 1) {
-      // MUTEX D
+    if (areSame(buffer_ACK, ACK_BUFFER_SIZE) == 1) {
+      pthread_mutex_lock(&lock);
       value_flag_ACK = actu_ACK;
-      // MUTEX F
+      pthread_mutex_unlock(&lock);
     } else {
-      // MUTEX D
+      pthread_mutex_lock(&lock);
       value_flag_ACK = 0;
-      // MUTEX F
+      pthread_mutex_unlock(&lock);
+    }
+
+    if (flag_STOP == 1) {
+      break;
     }
   }
-}
-
-int areSame(int arr[], int n) {
-  int first = arr[0];
-
-  for (int i = 1; i < n; i++)
-    if (arr[i] != first)
-      return 0;
-  return 1;
+  return NULL;
 }
 
 int main(int argc, char *argv[]) {
@@ -214,83 +257,90 @@ int main(int argc, char *argv[]) {
       // FERMER SOCKET ACCUEIL POUR ENFANT
       close(sock_udp);
 
-      pthread_t tid;
-      pthread_create(&tid, NULL, thread_send, sock_udp_data);
-      pthread_create(&tid, NULL, thread_receive, sock_udp_data);
-
       printf("\n** Switching to port : %d \n", port);
       // Receiving data message 'hello, I'm a useful message'
       char buffer_udp_msg[MSG_LEN_USEFUL];
       // unsigned int udp_size_ack = sizeof(data_msg_udp);
       recvfrom(sock_udp_data, &buffer_udp_msg, MSG_LEN_USEFUL, 0, (struct sockaddr *)&data_msg_udp, &udp_size_ack);
       printf("reading : %s \n", buffer_udp_msg);
+      struct data_thread data;
 
-      // Sending the jpeg file
-      int n;
-      // char buffer[SIZE];
-      FILE *fp = fopen(argv[3], "r");
-      int size = fseek(fp, 0L, SEEK_END);
-      long int res = ftell(fp);
-      printf("Size file %d \n", res);
+      data.addr_ptr = &data_msg_udp;
+      data.sock_in = sock_udp_data;
+      data.file_name = buffer_udp_msg;
 
-      // Going at the begening of the file to transmmit the begining
-      rewind(fp);
-      char buffer_file[SIZE];
-      // memset(buffer_file, 0, sizeof(buffer_file));
-      int sequence_number = 1;
+      pthread_create(&t_send, NULL, thread_send, &data);
+      pthread_create(&t_receive, NULL, thread_receive, &data);
+      pthread_join(t_send, NULL);
+      pthread_join(t_receive, NULL);
 
-      struct timeval tv;
-      tv.tv_sec = 0;
-      tv.tv_usec = 100000;
+      // // Sending the jpeg file
+      // int n;
+      // // char buffer[SIZE];
+      // FILE *fp = fopen(argv[3], "r");
+      // int size = fseek(fp, 0L, SEEK_END);
+      // long int res = ftell(fp);
+      // printf("Size file %d \n", res);
 
-      int chunk_file;
-      char seq_num[1032];
+      // // Going at the begening of the file to transmmit the begining
+      // rewind(fp);
+      // char buffer_file[SIZE];
+      // // memset(buffer_file, 0, sizeof(buffer_file));
+      // int sequence_number = 1;
 
-      // While not end of file
-      while (!feof(fp)) {
-        // Reading the file & sending a part
-        chunk_file = fread(buffer_file, 1, SIZE, fp);
-        sprintf(seq_num, "%06d", sequence_number);
-        memcpy(seq_num + 6, buffer_file, chunk_file);
-        sendto(sock_udp_data, seq_num, SIZE, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
+      // struct timeval tv;
+      // tv.tv_sec = 0;
+      // tv.tv_usec = 100000;
 
-        n = recvfrom(sock_udp_data, buffer_file, SIZE, 0, (struct sockaddr *)&data_msg_udp, &udp_size_ack);
-        printf("received : %s \n", buffer_file);
+      // int chunk_file;
+      // char seq_num[1032];
 
-        if (setsockopt(sock_udp_data, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-          perror("Error");
-        }
+      // // While not end of file
+      // while (!feof(fp)) {
+      //   // Reading the file & sending a part
+      //   chunk_file = fread(buffer_file, 1, SIZE, fp);
+      //   sprintf(seq_num, "%06d", sequence_number);
+      //   memcpy(seq_num + 6, buffer_file, chunk_file);
+      //   sendto(sock_udp_data, seq_num, SIZE, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
 
-        // all good
-        if (n > 0) {
-          printf("received : %s \n", buffer_file);
-        }
+      //   n = recvfrom(sock_udp_data, buffer_file, SIZE, 0, (struct sockaddr *)&data_msg_udp, &udp_size_ack);
+      //   printf("received : %s \n", buffer_file);
 
-        // if error in receiving (< 0)
-        else {
-          do {
-            printf("Error when receiving (%d), sending again %d\n", n, sequence_number);
-            sendto(sock_udp_data, seq_num, SIZE, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
-            n = recvfrom(sock_udp_data, buffer_file, SIZE, 0, (struct sockaddr *)&data_msg_udp, &udp_size_ack);
-            printf("received BIS : %s \n", buffer_file);
-          } while (n < 0);
-        }
+      //   if (setsockopt(sock_udp_data, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+      //     perror("Error");
+      //   }
 
-        // FD_SET(socketListener, &readfds);
+      //   // all good
+      //   if (n > 0) {
+      //     printf("received : %s \n", buffer_file);
+      //   }
 
-        // Making sure its the correct ACK
-        if (atoi(&buffer_file[3]) != sequence_number)
-          printf("expected received msg : %d \n", sequence_number);
+      //   // if error in receiving (< 0)
+      //   else {
+      //     do {
+      //       printf("Error when receiving (%d), sending again %d\n", n, sequence_number);
+      //       sendto(sock_udp_data, seq_num, SIZE, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
+      //       n = recvfrom(sock_udp_data, buffer_file, SIZE, 0, (struct sockaddr *)&data_msg_udp, &udp_size_ack);
+      //       printf("received BIS : %s \n", buffer_file);
+      //     } while (n < 0);
+      //   }
 
-        if (n == -1) {
-          perror("[ERROR] sending data to the server.\n");
-          exit(1);
-        }
-        memset(buffer_file, 0, sizeof(buffer_file));
-        sequence_number += 1;
-      }
-      fclose(fp);
-      // Sending it's the end of the file to the server
+      //   // FD_SET(socketListener, &readfds);
+
+      //   // Making sure its the correct ACK
+      //   if (atoi(&buffer_file[3]) != sequence_number)
+      //     printf("expected received msg : %d \n", sequence_number);
+
+      //   if (n == -1) {
+      //     perror("[ERROR] sending data to the server.\n");
+      //     exit(1);
+      //   }
+      //   memset(buffer_file, 0, sizeof(buffer_file));
+      //   sequence_number += 1;
+      // }
+      // fclose(fp);
+      // // Sending it's the end of the file to the server
+      pthread_mutex_destroy(&lock);
       char *file_ended = "FIN";
       sendto(sock_udp_data, file_ended, strlen(file_ended) + 1, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
       printf("**File sent : EOF**\n");
