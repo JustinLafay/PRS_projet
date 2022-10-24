@@ -43,43 +43,28 @@ int main(int argc, char* argv[])
 
     time_t start,end;
 
-    /** Server running ... **/
     while(1) {
-        // waiting to receive SYN
         char buffer_udp[MSG_LEN];
         unsigned int udp_size = sizeof(my_addr_udp);
         do {recvfrom(sock_udp, &buffer_udp, MSG_LEN, 0, (struct sockaddr*)&my_addr_udp, &udp_size);
-            //printf("Waiting for SYN... Reading : %s \n", buffer_udp);
         } while (strcmp(buffer_udp, "SYN") != 0 );
 
-        start = clock();
-
-        // Sending SYN_ACK
         bind(sock_udp_data, (struct sockaddr*)&data_msg_udp, sizeof(data_msg_udp));
         char buffer_udp_syn_ack[11];
         sprintf(buffer_udp_syn_ack, "SYN-ACK%d", ntohs(data_msg_udp.sin_port));
-        //printf("sending SYN_ACK ...\n");
         sendto(sock_udp, buffer_udp_syn_ack, strlen(buffer_udp_syn_ack)+1, 0, (struct sockaddr*)&my_addr_udp, sizeof(my_addr_udp));
 
-        // Receiving ACK
         char buffer_udp_ack[MSG_LEN];
         unsigned int udp_size_ack = sizeof(my_addr_udp);
         do{recvfrom(sock_udp, &buffer_udp_ack, MSG_LEN, 0, (struct sockaddr*)&my_addr_udp, &udp_size_ack);
-            //printf("Waiting for ACK... Reading : %s \n", buffer_udp_ack);
         } while(strcmp(buffer_udp_ack, "ACK") != 0);
-
 
         char buffer_udp_msg[MSG_LEN_USEFUL];
         recvfrom(sock_udp_data, &buffer_udp_msg, MSG_LEN_USEFUL, 0, (struct sockaddr*)&data_msg_udp, &udp_size_ack);
         //printf("reading : %s \n", buffer_udp_msg);
 
-        // Sending the jpeg file
         int n = 0 ;
         FILE* fp = fopen(buffer_udp_msg, "r");
-        int size = fseek(fp, 0L, SEEK_END);
-        long int res = ftell(fp);
-        //printf("Size file %d \n", res);
-
         fseek(fp, 0L, SEEK_SET);
         char buffer_file[SIZE];
         int sequence_number = 1;
@@ -91,10 +76,9 @@ int main(int argc, char* argv[])
         int chunk_file;
         char seq_num[1032];
         
-
+        start = clock();
         while (!feof(fp))
         {   
-            // Reading the file & sending a part
             chunk_file = fread(buffer_file, 1, SIZE, fp);
             sprintf(seq_num, "%06d", sequence_number);
             memcpy(seq_num+6, buffer_file, chunk_file);
@@ -107,37 +91,38 @@ int main(int argc, char* argv[])
             perror("Error");
             }
 
-            if (n > 0)
-                printf("received : %s \n", buffer_file);
+            /*if (n > 0)
+                printf("received : %s \n", buffer_file);*/
 
             else 
             {
                 do{
-                    //printf("Error when receiving (%d), sending again %d\n", n, sequence_number);
                     sendto(sock_udp_data, seq_num, SIZE, 0, (struct sockaddr*)&my_addr_udp, sizeof(my_addr_udp));
                     n = recvfrom(sock_udp_data, buffer_file, SIZE, 0, (struct sockaddr*)&data_msg_udp, &udp_size_ack);
                     //printf("received BIS : %s \n", buffer_file);
                 } while(n < 0);
             }
 
-            // Making sure its the correct ACK
             if (atoi(&buffer_file[3]) != sequence_number)
                 printf("expected received msg : %d, but received : %d SOS EVERYONE MUST PANIC \n",sequence_number, atoi(&buffer_file[3]) );
-                
             sequence_number += 1;
             
         }
         fclose(fp);
         char *file_ended = "FIN";
         sendto(sock_udp, file_ended, strlen(file_ended)+1, 0, (struct sockaddr*)&my_addr_udp, sizeof(my_addr_udp));
-        //printf("**File sent : EOF**\n");
 
         end = clock();
         double duration = ((double)end - start)/CLOCKS_PER_SEC;
-        
-        printf("Time taken to execute in miliseconds : %f \n", duration*1000);
+        printf("**File sent : EOF**\n");
+        printf("Time taken to execute in sec : %f \n", duration*100);
 
     } // end while(1)-> server stoped running 
-
-
 }
+
+
+/*
+MEMO : 
+w/ window : a 1.6Mo : 22 to 32sec
+
+*/
