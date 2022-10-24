@@ -41,7 +41,7 @@ struct data_thread {
   char *file_name;
 };
 
-// FONCTION CREATION DE SOCKET 
+// FONCTION CREATION DE SOCKET
 int create_sock(struct sockaddr_in *addr_ptr, int port) {
   int valid = 1;
   int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -64,7 +64,6 @@ int create_sock(struct sockaddr_in *addr_ptr, int port) {
   }
   return sock;
 }
-
 
 // FONCTION THREAD SEND
 void *thread_send(void *data) {
@@ -90,10 +89,25 @@ void *thread_send(void *data) {
   FD_SET(sock, &rtimeout);
   select(sock, &rtimeout, NULL, NULL, &tv);
 
+  fd_set input_set;
+  struct timeval timeout_2;
+  int ready_for_reading = 0;
+  int read_bytes = 0;
+
+  /* Empty the FD Set */
+  FD_ZERO(&input_set);
+  /* Listen to the input descriptor */
+  FD_SET(STDIN_FILENO, &input_set);
+
+  /* Waiting for some seconds */
+  timeout_2.tv_sec = 0;    // WAIT seconds
+  timeout_2.tv_usec = 50;  // 0 milliseconds
+  ready_for_reading = select(1, &input_set, NULL, NULL, &timeout_2);
+
   int chunk_file;
-  char data_send [1472];
+  char data_send[1472];
   char buffer_file[SIZE];
-  char circular_buffer[BUFFER * SIZE] = {0};
+  char circular_buffer[BUFFER][SIZE] = {0};
   int i, sequence_number = 0;
 
   memset(buffer_file, 0, sizeof(buffer_file));
@@ -102,12 +116,14 @@ void *thread_send(void *data) {
     while (credit > 0) {
       sequence_number++;
       sprintf(data_send, "%06d", sequence_number);
-      chunk_file = fread((char *)&circular_buffer[SIZE * sequence_number % BUFFER], 1, SIZE, fp);
+      if (!feof(fp)) {
+        chunk_file = fread((char *)&circular_buffer[(sequence_number - 1) % BUFFER], 1, SIZE, fp);
 
-      memcpy(data_send + 6, (char *)&circular_buffer[SIZE * sequence_number % BUFFER], chunk_file);
-      // printf("%d\n", ntohl(addr_ptr->sin_port));
-      printf("Sent %ld bytes to %s:%d\n", SIZE, inet_ntoa(addr_ptr->sin_addr), ntohs(addr_ptr->sin_port));
-      sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
+        memcpy(data_send + 6, (char *)&circular_buffer[(sequence_number - 1) % BUFFER], chunk_file);
+        // printf("%d\n", ntohl(addr_ptr->sin_port));
+        // printf("Sent %ld bytes to %s:%d\n", SIZE, inet_ntoa(addr_ptr->sin_addr), ntohs(addr_ptr->sin_port));
+        sendto(sock, data_send, chunk_file + 6, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
+      }
       pthread_mutex_lock(&lock);
       credit--;
       pthread_mutex_unlock(&lock);
@@ -120,9 +136,15 @@ void *thread_send(void *data) {
 
     // char neg_shift = circular_buffer[sequence_number - value_flag_ACK];
 
+    // if (ready_for_reading){
+
+    // }
     pthread_mutex_lock(&lock);
     if (value_flag_ACK != 0) {
-      memcpy(data_send + 6, (char *)&circular_buffer[SIZE * sequence_number % BUFFER], chunk_file);
+      // printf("SEQUENCE NUMBER : %d\n", sequence_number);
+      sprintf(data_send, "%06d", value_flag_ACK + 1);
+      // printf("RESENT :%s\n",data_send);
+      memcpy(data_send + 6, (char *)&circular_buffer[(value_flag_ACK + 1) % BUFFER], chunk_file);
       sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
     }
     pthread_mutex_unlock(&lock);
@@ -144,7 +166,7 @@ void *thread_receive(void *data) {
   char buffer_file[SIZE];
 
   int buffer_ACK[ACK_BUFFER_SIZE] = {0};
-  int last_ACK = 0, actu_ACK = 0, grosse_patate = 0;
+  int last_ACK = 0, actu_ACK = 0, buffer = 0;
   int ld = sizeof(struct sockaddr *);
   while (1) {
     recvfrom(sock, buffer_file, SIZE, 0, (struct sockaddr *)addr_ptr, &ld);
@@ -155,25 +177,28 @@ void *thread_receive(void *data) {
     buffer_ACK[ACK_BUFFER_SIZE - 1] = atoi(&buffer_file[3]);
 
     for (int j = 0; j < ACK_BUFFER_SIZE; j++) {
-      if (grosse_patate < buffer_ACK[j]) {
-        grosse_patate = buffer_ACK[j];
+      if (buffer < buffer_ACK[j]) {
+        buffer = buffer_ACK[j];
       }
     }
 
     last_ACK = actu_ACK;
-    actu_ACK = grosse_patate;
+    actu_ACK = buffer;
+    // printf("LAST ACK : %d\n", last_ACK);
+    // printf("ACTU ACK : %d\n", actu_ACK);
 
     pthread_mutex_lock(&lock);
     if (credit < 30) {
       credit = credit + (actu_ACK - last_ACK);
     }
+    // printf("CREDIT : %d\n",credit);
     pthread_mutex_unlock(&lock);
 
     int first = buffer_ACK[0];
 
     if (areSame(buffer_ACK, ACK_BUFFER_SIZE) == 1) {
+      printf("ACTU ACK : %d\n", actu_ACK);
       pthread_mutex_lock(&lock);
-      printf("RESENT DATA\n");
       value_flag_ACK = actu_ACK;
       pthread_mutex_unlock(&lock);
     } else {
