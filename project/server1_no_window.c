@@ -13,7 +13,7 @@
 #define MSG_LEN 5
 #define MSG_LEN_USEFUL 100
 #define PORT_DATA 1234
-#define SIZE 1024
+#define SIZE 1466
 
 int main(int argc, char* argv[])
 {   
@@ -65,6 +65,10 @@ int main(int argc, char* argv[])
 
         int n = 0 ;
         FILE* fp = fopen(buffer_udp_msg, "r");
+        int size = fseek(fp, 0L, SEEK_END);
+        long int res = (ftell(fp))/1000;
+        printf("Size file %f Ko\n", res);
+
         fseek(fp, 0L, SEEK_SET);
         char buffer_file[SIZE];
         int sequence_number = 1;
@@ -74,7 +78,7 @@ int main(int argc, char* argv[])
         tv.tv_usec = 100000;
 
         int chunk_file;
-        char seq_num[1032];
+        char seq_num[1472];
         
         start = clock();
         while (!feof(fp))
@@ -113,9 +117,13 @@ int main(int argc, char* argv[])
         sendto(sock_udp, file_ended, strlen(file_ended)+1, 0, (struct sockaddr*)&my_addr_udp, sizeof(my_addr_udp));
 
         end = clock();
-        double duration = ((double)end - start)/CLOCKS_PER_SEC;
+        double duration = (((double)end - start)/CLOCKS_PER_SEC)*100;
         printf("**File sent : EOF**\n");
-        printf("Time taken to execute in sec : %f \n", duration*100);
+        printf("Time taken to execute in sec : %f \n", duration);
+
+        int sos = res/duration;
+
+        printf("speed of light : %.6f ko/s\n", sos);
 
     } // end while(1)-> server stoped running 
 }
@@ -123,6 +131,6 @@ int main(int argc, char* argv[])
 
 /*
 MEMO : 
-w/ window : a 1.6Mo : 22 to 32sec
+w/ window : a 1.6Mo : 22 to 32sec (entre 0.07 et 0.15 Mo/s)
 
 */
