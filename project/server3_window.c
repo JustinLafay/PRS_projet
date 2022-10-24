@@ -41,7 +41,7 @@ struct data_thread {
   char *file_name;
 };
 
-// FONCTION CREATION DE SOCKET
+// FONCTION CREATION DE SOCKET 
 int create_sock(struct sockaddr_in *addr_ptr, int port) {
   int valid = 1;
   int sock = socket(AF_INET, SOCK_DGRAM, 0);
