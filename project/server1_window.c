@@ -15,8 +15,8 @@
 #define MSG_LEN_USEFUL 100
 #define PORT_DATA 1234
 #define SIZE 1466
-#define ACK_BUFFER_SIZE 2
-#define BUFFER 30
+#define ACK_BUFFER_SIZE 3
+#define BUFFER 10
 
 pthread_t t_send;
 pthread_t t_receive;
@@ -120,8 +120,14 @@ void *thread_send(void *data)
             pthread_mutex_unlock(&lock);
         }
 
-
         int ret= select(sock+1, &rtimeout,NULL, NULL, &tv);
+
+
+
+
+
+
+
         if ((ret == 0) && (value_flag_ACK == 0)) {
             sprintf(data_send, "%06d", value_flag_ACK);
             memcpy(data_send + 6, (char *)&circular_buffer[value_flag_ACK % BUFFER], chunk_file);
@@ -141,16 +147,10 @@ void *thread_send(void *data)
             sprintf(data_send, "%06d", value_flag_ACK+3);
             memcpy(data_send + 6, (char *)&circular_buffer[(value_flag_ACK+3) % BUFFER], chunk_file);
             sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
-            sprintf(data_send, "%06d", value_flag_ACK+4);
+            /*sprintf(data_send, "%06d", value_flag_ACK+4);
             memcpy(data_send + 6, (char *)&circular_buffer[(value_flag_ACK+4) % BUFFER], chunk_file);
-            sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
-            sprintf(data_send, "%06d", value_flag_ACK+5);
-            memcpy(data_send + 6, (char *)&circular_buffer[(value_flag_ACK+5) % BUFFER], chunk_file);
-            sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
-            sprintf(data_send, "%06d", value_flag_ACK+6);
-            memcpy(data_send + 6, (char *)&circular_buffer[(value_flag_ACK+6) % BUFFER], chunk_file);
-            sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
-            //sleep(0.005);
+            sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));*/
+            sleep(0.005);
         }
         pthread_mutex_unlock(&lock);
     }
@@ -162,7 +162,7 @@ void *thread_send(void *data)
 // FONCTION THREAD RECEIVE
 void *thread_receive(void *data)
 {
-    struct data_thread *info = data;
+    struct data_thread *info = data;                     
 
     int sock = info->sock_in;
     struct sockaddr_in *addr_ptr = info->addr_ptr;
@@ -176,44 +176,59 @@ void *thread_receive(void *data)
     while (1)
     {   
         recvfrom(sock, buffer_file, SIZE, 0, (struct sockaddr *)addr_ptr, &ld);
-        for (int i = 0; i < ACK_BUFFER_SIZE - 1; i++)
+        /*for (int i = 0; i < ACK_BUFFER_SIZE - 1; i++)
         {
             buffer_ACK[i] = buffer_ACK[i + 1];
         }
-        buffer_ACK[ACK_BUFFER_SIZE - 1] = atoi(&buffer_file[3]);
+        //printf("buffer_file %d \n", buffer_file[3]);
+        buffer_ACK[ACK_BUFFER_SIZE - 1] = atoi(&buffer_file[3]);*/
 
-        for (int j = 0; j < ACK_BUFFER_SIZE; j++)
+
+        int init_value_stock = 0, init_val = 0;
+        int new_val = atoi(&buffer_file[3]);
+        init_value_stock = init_val;
+        if (new_val > init_val){
+            init_val = new_val;
+        }
+
+        /*for (int j = 0; j < ACK_BUFFER_SIZE; j++)
         {
             if (temp < buffer_ACK[j])
             {
                 temp = buffer_ACK[j];
             }
-        }
+        }*/
 
-        last_ACK = actu_ACK;
-        actu_ACK = temp;
+        /*last_ACK = actu_ACK;
+        printf("last_ACK %d temp %d \n", last_ACK, temp);
+        actu_ACK = temp;*/
 
         pthread_mutex_lock(&lock);
         if (credit < 30)
         {
-            credit = credit + (actu_ACK - last_ACK);
+            credit = credit + (init_val - init_value_stock);
         }
         pthread_mutex_unlock(&lock);
 
         int first = buffer_ACK[0];
 
-        if (areSame(buffer_ACK, ACK_BUFFER_SIZE) == 1)
+        /*if (areSame(buffer_ACK, ACK_BUFFER_SIZE) == 1)
         {
             pthread_mutex_lock(&lock);
             value_flag_ACK = actu_ACK;
             pthread_mutex_unlock(&lock);
-        }
-        else
+        }*/
+
+        pthread_mutex_lock(&lock);
+        value_flag_ACK = init_val;
+        pthread_mutex_unlock(&lock);
+
+       /* else
         {
             pthread_mutex_lock(&lock);
             value_flag_ACK = 0;
             pthread_mutex_unlock(&lock);
-        }
+        }*/
 
         if (flag_STOP == 1)
         {
@@ -229,8 +244,6 @@ int main(int argc, char *argv[])
     struct sockaddr_in my_addr_udp;
     int reuse_udp = 1;
     int sock_udp = create_sock(&my_addr_udp, atoi(argv[2]));
-
-    time_t start, end;
 
     while (1)
     {
@@ -258,8 +271,6 @@ int main(int argc, char *argv[])
         recvfrom(sock_udp_data, &buffer_udp_msg, MSG_LEN_USEFUL, 0, (struct sockaddr *)&data_msg_udp, &udp_size_ack);
         // printf("reading : %s \n", buffer_udp_msg);
 
-        start = clock();
-
         struct data_thread data;
         data.addr_ptr = &data_msg_udp;
         data.sock_in = sock_udp_data;
@@ -271,12 +282,12 @@ int main(int argc, char *argv[])
         pthread_join(t_receive, NULL);
 
         char *file_ended = "FIN";
-        sleep(1);
-        sendto(sock_udp, file_ended, strlen(file_ended) + 1, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
-
-        end = clock();
-        double duration = ((double)end - start) / CLOCKS_PER_SEC;
-        printf("Time taken to execute in sec : %f \n", duration);
+        int try;
+        for (try= 1; try <= 10; try++) {
+            sendto(sock_udp, file_ended, strlen(file_ended) + 1, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
+            usleep(5*try);
+        }
+        printf("EOF \n" );
     }
 }
 
