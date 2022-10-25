@@ -13,7 +13,7 @@
 #define MSG_LEN 60
 #define MSG_LEN_USEFUL 700
 #define SIZE 1466
-#define ACK_BUFFER_SIZE 6
+#define ACK_BUFFER_SIZE 2
 #define BUFFER 30
 
 pthread_t t_send;
@@ -89,31 +89,28 @@ void *thread_send(void *data) {
   FD_SET(sock, &rtimeout);
   select(sock, &rtimeout, NULL, NULL, &tv);
 
-  fd_set input_set;
+  // fd_set input_set;
 
-  /* Empty the FD Set */
-  FD_ZERO(&input_set);
-  /* Listen to the input descriptor */
-  FD_SET(STDIN_FILENO, &input_set);
+  // /* Empty the FD Set */
+  // FD_ZERO(&input_set);
+  // /* Listen to the input descriptor */
+  // FD_SET(STDIN_FILENO, &input_set);
 
   int chunk_file;
   char data_send[1472];
-  char buffer_file[SIZE];
   char circular_buffer[BUFFER][SIZE] = {0};
   int i, sequence_number = 0;
 
-  memset(buffer_file, 0, sizeof(buffer_file));
   rewind(fp);
   while (!feof(fp)) {
+    pthread_mutex_lock(&lock);
+    int local = value_flag_ACK;
+    pthread_mutex_unlock(&lock);
     while (credit > 0) {
-      sequence_number++;
-      sprintf(data_send, "%06d", sequence_number);
-      if (!feof(fp)) {
-        chunk_file = fread((char *)&circular_buffer[(sequence_number) % BUFFER], 1, SIZE, fp);
-
-        memcpy(data_send + 6, (char *)&circular_buffer[(sequence_number) % BUFFER], chunk_file);
-        // printf("%d\n", ntohl(addr_ptr->sin_port));
-        // printf("Sent %ld bytes to %s:%d\n", SIZE, inet_ntoa(addr_ptr->sin_addr), ntohs(addr_ptr->sin_port));
+      if (!feof(fp) && (sequence_number == value_flag_ACK)) {
+        sequence_number++;
+        sprintf(data_send, "%06d", sequence_number);
+        chunk_file = fread((char *)&circular_buffer[(sequence_number - 1) % BUFFER], 1, SIZE, fp);
         sendto(sock, data_send, chunk_file + 6, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
         pthread_mutex_lock(&lock);
         credit--;
@@ -122,27 +119,15 @@ void *thread_send(void *data) {
     }
 
     int ret = select(sock + 1, &rtimeout, NULL, NULL, &tv);
-    if ((ret == 0) && (value_flag_ACK == 0)) {
-      sprintf(data_send, "%06d", value_flag_ACK);
-      memcpy(data_send + 6, (char *)&circular_buffer[value_flag_ACK % BUFFER], chunk_file);
+    if (ret == 0) {
+      sprintf(data_send, "%06d", local);
+      memcpy(data_send + 6, (char *)&circular_buffer[local % BUFFER], chunk_file);
       sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
     }
 
-    // char neg_shift = circular_buffer[sequence_number - value_flag_ACK];
-
-    // if (ready_for_reading){
-
-    // }
-    pthread_mutex_lock(&lock);
-    int local = value_flag_ACK;
-    pthread_mutex_unlock(&lock);
-
-    if (local != 0) {
-      // printf("SEQUENCE NUMBER : %d\n", sequence_number);
+    else {
       sprintf(data_send, "%06d", local + 1);
-      // printf("RESENT :%s\n",data_send);
-      memcpy(data_send + 6, (char *)&circular_buffer[(local + 1) % BUFFER], chunk_file);
-      // sleep(0.005);
+      memcpy(data_send + 6, (char *)&circular_buffer[local % BUFFER], chunk_file);
       sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
     }
   }
@@ -172,6 +157,7 @@ void *thread_receive(void *data) {
       buffer_ACK[i] = buffer_ACK[i + 1];
     }
     buffer_ACK[ACK_BUFFER_SIZE - 1] = atoi(&buffer_file[3]);
+    // printf("DATA BRUT : %d\n",atoi(&buffer_file[3]));
 
     for (int j = 0; j < ACK_BUFFER_SIZE; j++) {
       if (buffer < buffer_ACK[j]) {
@@ -181,11 +167,9 @@ void *thread_receive(void *data) {
 
     last_ACK = actu_ACK;
     actu_ACK = buffer;
-    // printf("LAST ACK : %d\n", last_ACK);
-    // printf("ACTU ACK : %d\n", actu_ACK);
+    // printf("actu_ACK : %d\n",actu_ACK);
 
     if (areSame(buffer_ACK, ACK_BUFFER_SIZE) == 1) {
-      // printf("ACTU ACK : %d\n", actu_ACK);
       pthread_mutex_lock(&lock);
       value_flag_ACK = actu_ACK;
       pthread_mutex_unlock(&lock);
@@ -280,6 +264,7 @@ int main(int argc, char *argv[]) {
     pthread_join(t_receive, NULL);
 
     pthread_mutex_destroy(&lock);
+    sleep(1);
     char *file_ended = "FIN";
     sendto(sock_udp_data, file_ended, strlen(file_ended) + 1, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
     printf("**File sent : EOF**\n");
