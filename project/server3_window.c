@@ -14,13 +14,13 @@
 #define MSG_LEN_USEFUL 700
 #define SIZE 1466
 #define ACK_BUFFER_SIZE 4
-#define BUFFER 30
+#define BUFFER 200
 
 pthread_t t_send;
 pthread_t t_receive;
 
 // VALEURS A SURVEILLER AVEC MUTEX
-int credit = 30;
+int credit = BUFFER;
 int value_flag_ACK = 0;
 int flag_STOP = 0;
 
@@ -146,6 +146,7 @@ void *thread_send(void *data) {
       // printf("RESENT :%s\n",data_send);
       memcpy(data_send + 6, (char *)&circular_buffer[(value_flag_ACK + 1) % BUFFER], chunk_file);
       sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
+      sleep(0.005);
     }
     pthread_mutex_unlock(&lock);
   }
@@ -197,7 +198,7 @@ void *thread_receive(void *data) {
     int first = buffer_ACK[0];
 
     if (areSame(buffer_ACK, ACK_BUFFER_SIZE) == 1) {
-      printf("ACTU ACK : %d\n", actu_ACK);
+      // printf("ACTU ACK : %d\n", actu_ACK);
       pthread_mutex_lock(&lock);
       value_flag_ACK = actu_ACK;
       pthread_mutex_unlock(&lock);
@@ -215,6 +216,7 @@ void *thread_receive(void *data) {
 }
 
 int main(int argc, char *argv[]) {
+  time_t start, end;
   int port = 1500;
   /** Server running ... **/
   while (1) {
@@ -278,6 +280,8 @@ int main(int argc, char *argv[]) {
     data.sock_in = sock_udp_data;
     data.file_name = buffer_udp_msg;
 
+    start = clock();
+
     pthread_create(&t_send, NULL, thread_send, &data);
     pthread_create(&t_receive, NULL, thread_receive, &data);
     pthread_join(t_send, NULL);
@@ -287,6 +291,10 @@ int main(int argc, char *argv[]) {
     char *file_ended = "FIN";
     sendto(sock_udp_data, file_ended, strlen(file_ended) + 1, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
     printf("**File sent : EOF**\n");
+
+    end = clock();
+    double duration = ((double)end - start) / CLOCKS_PER_SEC;
+    printf("Time taken to execute in sec : %f \n", duration);
 
     // FERMER SOCKET DONNEE
     close(sock_udp_data);
