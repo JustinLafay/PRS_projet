@@ -13,8 +13,8 @@
 #define MSG_LEN 60
 #define MSG_LEN_USEFUL 700
 #define SIZE 1466
-#define ACK_BUFFER_SIZE 4
-#define BUFFER 200
+#define ACK_BUFFER_SIZE 6
+#define BUFFER 30
 
 pthread_t t_send;
 pthread_t t_receive;
@@ -90,19 +90,11 @@ void *thread_send(void *data) {
   select(sock, &rtimeout, NULL, NULL, &tv);
 
   fd_set input_set;
-  struct timeval timeout_2;
-  int ready_for_reading = 0;
-  int read_bytes = 0;
 
   /* Empty the FD Set */
   FD_ZERO(&input_set);
   /* Listen to the input descriptor */
   FD_SET(STDIN_FILENO, &input_set);
-
-  /* Waiting for some seconds */
-  timeout_2.tv_sec = 0;    // WAIT seconds
-  timeout_2.tv_usec = 50;  // 0 milliseconds
-  ready_for_reading = select(1, &input_set, NULL, NULL, &timeout_2);
 
   int chunk_file;
   char data_send[1472];
@@ -117,20 +109,22 @@ void *thread_send(void *data) {
       sequence_number++;
       sprintf(data_send, "%06d", sequence_number);
       if (!feof(fp)) {
-        chunk_file = fread((char *)&circular_buffer[(sequence_number - 1) % BUFFER], 1, SIZE, fp);
+        chunk_file = fread((char *)&circular_buffer[(sequence_number) % BUFFER], 1, SIZE, fp);
 
-        memcpy(data_send + 6, (char *)&circular_buffer[(sequence_number - 1) % BUFFER], chunk_file);
+        memcpy(data_send + 6, (char *)&circular_buffer[(sequence_number) % BUFFER], chunk_file);
         // printf("%d\n", ntohl(addr_ptr->sin_port));
         // printf("Sent %ld bytes to %s:%d\n", SIZE, inet_ntoa(addr_ptr->sin_addr), ntohs(addr_ptr->sin_port));
         sendto(sock, data_send, chunk_file + 6, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
+        pthread_mutex_lock(&lock);
+        credit--;
+        pthread_mutex_unlock(&lock);
       }
-      pthread_mutex_lock(&lock);
-      credit--;
-      pthread_mutex_unlock(&lock);
     }
 
-    if (FD_ISSET(sock, &rtimeout)) {
-      memcpy(data_send + 6, buffer_file, chunk_file);
+    int ret = select(sock + 1, &rtimeout, NULL, NULL, &tv);
+    if ((ret == 0) && (value_flag_ACK == 0)) {
+      sprintf(data_send, "%06d", value_flag_ACK);
+      memcpy(data_send + 6, (char *)&circular_buffer[value_flag_ACK % BUFFER], chunk_file);
       sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
     }
 
@@ -140,15 +134,17 @@ void *thread_send(void *data) {
 
     // }
     pthread_mutex_lock(&lock);
-    if (value_flag_ACK != 0) {
-      // printf("SEQUENCE NUMBER : %d\n", sequence_number);
-      sprintf(data_send, "%06d", value_flag_ACK + 1);
-      // printf("RESENT :%s\n",data_send);
-      memcpy(data_send + 6, (char *)&circular_buffer[(value_flag_ACK + 1) % BUFFER], chunk_file);
-      sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
-      sleep(0.005);
-    }
+    int local = value_flag_ACK;
     pthread_mutex_unlock(&lock);
+
+    if (local != 0) {
+      // printf("SEQUENCE NUMBER : %d\n", sequence_number);
+      sprintf(data_send, "%06d", local + 1);
+      // printf("RESENT :%s\n",data_send);
+      memcpy(data_send + 6, (char *)&circular_buffer[(local + 1) % BUFFER], chunk_file);
+      // sleep(0.005);
+      sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
+    }
   }
   fclose(fp);
   flag_STOP = 1;
@@ -188,15 +184,6 @@ void *thread_receive(void *data) {
     // printf("LAST ACK : %d\n", last_ACK);
     // printf("ACTU ACK : %d\n", actu_ACK);
 
-    pthread_mutex_lock(&lock);
-    if (credit < 30) {
-      credit = credit + (actu_ACK - last_ACK);
-    }
-    // printf("CREDIT : %d\n",credit);
-    pthread_mutex_unlock(&lock);
-
-    int first = buffer_ACK[0];
-
     if (areSame(buffer_ACK, ACK_BUFFER_SIZE) == 1) {
       // printf("ACTU ACK : %d\n", actu_ACK);
       pthread_mutex_lock(&lock);
@@ -207,6 +194,13 @@ void *thread_receive(void *data) {
       value_flag_ACK = 0;
       pthread_mutex_unlock(&lock);
     }
+
+    pthread_mutex_lock(&lock);
+    if (credit < 30) {
+      credit = credit + (actu_ACK - last_ACK);
+    }
+    pthread_mutex_unlock(&lock);
+    // printf("CREDIT : %d\n",credit);
 
     if (flag_STOP == 1) {
       break;
@@ -280,8 +274,6 @@ int main(int argc, char *argv[]) {
     data.sock_in = sock_udp_data;
     data.file_name = buffer_udp_msg;
 
-    start = clock();
-
     pthread_create(&t_send, NULL, thread_send, &data);
     pthread_create(&t_receive, NULL, thread_receive, &data);
     pthread_join(t_send, NULL);
@@ -291,10 +283,6 @@ int main(int argc, char *argv[]) {
     char *file_ended = "FIN";
     sendto(sock_udp_data, file_ended, strlen(file_ended) + 1, 0, (struct sockaddr *)&my_addr_udp, sizeof(my_addr_udp));
     printf("**File sent : EOF**\n");
-
-    end = clock();
-    double duration = ((double)end - start) / CLOCKS_PER_SEC;
-    printf("Time taken to execute in sec : %f \n", duration);
 
     // FERMER SOCKET DONNEE
     close(sock_udp_data);
