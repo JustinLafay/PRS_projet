@@ -75,60 +75,78 @@ void *thread_send(void *data) {
   struct sockaddr_in *addr_ptr = info->addr_ptr;
   char *file_name = info->file_name;
 
-  FILE *fp = fopen(file_name, "r");
-  int size = fseek(fp, 0L, SEEK_END);
-  long int res = ftell(fp);
-  printf("Size file %d \n", res);
-
   struct timeval tv;
   tv.tv_sec = 0;
-  tv.tv_usec = 100000;
+  tv.tv_usec = 1000;
 
   fd_set rtimeout;
   FD_ZERO(&rtimeout);
   FD_SET(sock, &rtimeout);
   select(sock, &rtimeout, NULL, NULL, &tv);
 
-  // fd_set input_set;
-
-  // /* Empty the FD Set */
-  // FD_ZERO(&input_set);
-  // /* Listen to the input descriptor */
-  // FD_SET(STDIN_FILENO, &input_set);
-
   int chunk_file;
   char data_send[1472];
   char circular_buffer[BUFFER][SIZE] = {0};
-  int i, sequence_number = 0;
+  int i, sequence_number = 0, local = 0;
 
-  rewind(fp);
+  // OUVRIR LE FICHIER
+  FILE *fp = fopen(file_name, "r");
+  int size = fseek(fp, 0L, SEEK_SET);
+
   while (!feof(fp)) {
     pthread_mutex_lock(&lock);
-    int local = value_flag_ACK;
+    // STOCKAGE DE L'ACK LE PLUS HAUT ENVOYE PAR LE CLIENT
+    local = value_flag_ACK;
     pthread_mutex_unlock(&lock);
-    while (credit > 0) {
-      if (!feof(fp) && (sequence_number == value_flag_ACK)) {
-        sequence_number++;
-        sprintf(data_send, "%06d", sequence_number);
-        chunk_file = fread((char *)&circular_buffer[(sequence_number - 1) % BUFFER], 1, SIZE, fp);
+
+    while (credit > 0)  {
+      pthread_mutex_lock(&lock);
+      // STOCKAGE DE L'ACK LE PLUS HAUT ENVOYE PAR LE CLIENT
+      local = value_flag_ACK;
+      pthread_mutex_unlock(&lock);
+
+      // SI !FIN DE FICHIER ET NUMERO DE SEQUENCE = ACK LE PLUS HAUT
+      printf("sequ_numb : %d, local : %d\n", sequence_number, local);
+      if (!feof(fp) && (sequence_number == local)) {
+        // COPIE DU NUMERO DE SEQUENCE DANS LE BUFFER (on fait "sequence_number + 1" car pour la première trame le tableau buffer commence à 0)
+        sprintf(data_send, "%06d", sequence_number + 1);
+        // COPIE DE LA DONNEE DU FICHIER DANS LE BUFFER CIRCULAIRE
+        chunk_file = fread((char *)&circular_buffer[sequence_number % BUFFER], 1, SIZE, fp);
+        // AJOUT DU NUMERO DE TRAME ET DE LA DONNEE CORRESPONDANTE DANS LE BUFFER CIRCULAIRE
+        memcpy(data_send + 6, (char *)&circular_buffer[sequence_number % BUFFER], chunk_file);
+
+        // ENVOI
+        printf("Num seq : %d\n", local);
         sendto(sock, data_send, chunk_file + 6, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
+
+        // INCREMENTATION DU NUMERO DE SEQUENCE
+        sequence_number++;
         pthread_mutex_lock(&lock);
         credit--;
         pthread_mutex_unlock(&lock);
       }
     }
 
+    printf("TIMEOUT\n");
     int ret = select(sock + 1, &rtimeout, NULL, NULL, &tv);
     if (ret == 0) {
-      sprintf(data_send, "%06d", local);
-      memcpy(data_send + 6, (char *)&circular_buffer[local % BUFFER], chunk_file);
-      sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
-    }
-
-    else {
-      sprintf(data_send, "%06d", local + 1);
-      memcpy(data_send + 6, (char *)&circular_buffer[local % BUFFER], chunk_file);
-      sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
+      printf("TIMEOUT\n");
+      // SI NUMERO DE SEQUENCE = ACK LE PLUS HAUT
+      if (sequence_number == local) {
+        // AJOUT DE 1 CREDIT POUR SEND LA TRAME SUIVANTE
+        pthread_mutex_lock(&lock);
+        credit++;
+        pthread_mutex_unlock(&lock);
+        // USLEEP POUR LAISSER LE THREAD RECEIVE
+        usleep(10);
+      } else {
+        // COPIE DU NUMERO DE SEQUENCE DANS LE BUFFER
+        sprintf(data_send, "%06d", local + 1);
+        // COPIE DE LA DATA CIRCULAR BUFFER AU NUMERO DE SEQUENCE DONNEE
+        memcpy(data_send + 6, (char *)&circular_buffer[local % BUFFER], chunk_file);
+        // ENVOI
+        sendto(sock, data_send, SIZE, 0, (struct sockaddr *)addr_ptr, sizeof(struct sockaddr_in));
+      }
     }
   }
   fclose(fp);
@@ -148,43 +166,38 @@ void *thread_receive(void *data) {
   char buffer_file[SIZE];
 
   int buffer_ACK[ACK_BUFFER_SIZE] = {0};
-  int last_ACK = 0, actu_ACK = 0, buffer = 0;
+  int last_ACK = 0, actu_ACK = 0, buffer = 0, temp = 0;
   int ld = sizeof(struct sockaddr *);
   while (1) {
     recvfrom(sock, buffer_file, SIZE, 0, (struct sockaddr *)addr_ptr, &ld);
 
-    for (int i = 0; i < ACK_BUFFER_SIZE - 1; i++) {
-      buffer_ACK[i] = buffer_ACK[i + 1];
-    }
-    buffer_ACK[ACK_BUFFER_SIZE - 1] = atoi(&buffer_file[3]);
-    // printf("DATA BRUT : %d\n",atoi(&buffer_file[3]));
-
-    for (int j = 0; j < ACK_BUFFER_SIZE; j++) {
-      if (buffer < buffer_ACK[j]) {
-        buffer = buffer_ACK[j];
-      }
-    }
-
+    // STOCKAGE DU DERNIER ACK
     last_ACK = actu_ACK;
-    actu_ACK = buffer;
-    // printf("actu_ACK : %d\n",actu_ACK);
+    // AJOUT DU NOUVEL ACK
+    actu_ACK = atoi(&buffer_file[3]);
 
-    if (areSame(buffer_ACK, ACK_BUFFER_SIZE) == 1) {
-      pthread_mutex_lock(&lock);
-      value_flag_ACK = actu_ACK;
-      pthread_mutex_unlock(&lock);
-    } else {
-      pthread_mutex_lock(&lock);
-      value_flag_ACK = 0;
-      pthread_mutex_unlock(&lock);
+    // COMPARAISON SI NOUVEL ACK < ANCIEN ACK (pour toujours avoir le dernier ACK reçu dans value_flag_ACK)
+    if (actu_ACK < last_ACK) {
+      actu_ACK = last_ACK;
     }
 
+    // PASSAGE DE actu_ACK AU THREAD SENDTO
+    pthread_mutex_lock(&lock);
+    value_flag_ACK = actu_ACK;
+    pthread_mutex_unlock(&lock);
+
+    // ACTUALISATION DU CREDIT
     pthread_mutex_lock(&lock);
     if (credit < 30) {
-      credit = credit + (actu_ACK - last_ACK);
+      temp = credit + (actu_ACK - last_ACK);
+      if (temp > 30) {
+        temp = 30;
+        credit = temp;
+      } else {
+        credit = temp;
+      }
     }
     pthread_mutex_unlock(&lock);
-    // printf("CREDIT : %d\n",credit);
 
     if (flag_STOP == 1) {
       break;
